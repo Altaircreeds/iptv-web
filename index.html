@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="referrer" content="no-referrer">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TV Ultimate - Fix Edition</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mux.js/6.0.1/mux.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/shaka-player@4.14.10/dist/shaka-player.compiled.js"></script>
+    <style>
+        :root { --primary: #00ff88; --bg: #0a0a0a; --surface: #1a1a1a; --text: #eee; }
+        body { margin: 0; font-family: sans-serif; background: var(--bg); color: var(--text); display: flex; height: 100vh; }
+        
+        #nav { width: 60px; background: #000; display: flex; flex-direction: column; align-items: center; padding-top: 20px; border-right: 1px solid #222; }
+        .nav-btn { margin-bottom: 20px; cursor: pointer; font-size: 24px; opacity: 0.5; }
+        .nav-btn.active { opacity: 1; color: var(--primary); }
+
+        #sidebar { width: 300px; background: var(--surface); display: flex; flex-direction: column; border-right: 1px solid #333; }
+        #search-box { padding: 10px; }
+        #search-input { width: 100%; padding: 8px; border-radius: 5px; border: none; background: #333; color: white; box-sizing: border-box; }
+        #list { flex: 1; overflow-y: auto; }
+        
+        .item { display: flex; align-items: center; padding: 10px; cursor: pointer; border-bottom: 1px solid #222; font-size: 14px; }
+        .item:hover { background: #2a2a2a; }
+        .item img { width: 40px; height: 40px; margin-right: 10px; object-fit: contain; background: #000; border-radius: 4px; }
+        .cat-label { padding: 10px; background: #252525; font-size: 11px; color: var(--primary); font-weight: bold; }
+
+        #main { flex: 1; background: #000; display: flex; flex-direction: column; position: relative; }
+        #video-container { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; }
+        video { width: 100%; height: 100%; max-height: 100vh; }
+        
+        #ep-list { height: 150px; background: #111; display: none; overflow-y: auto; padding: 10px; border-top: 1px solid var(--primary); }
+        .ep-item { display: inline-block; padding: 8px 12px; background: #222; margin: 4px; border-radius: 4px; font-size: 12px; cursor: pointer; }
+        .ep-item:hover { background: var(--primary); color: #000; }
+        
+        #loading-info { position: absolute; top: 10px; right: 10px; font-size: 12px; color: var(--primary); background: rgba(0,0,0,0.5); padding: 5px; border-radius: 4px; pointer-events: none; }
+    
+        /* Para las categorías */
+        .categoria-header {
+            background: #333;
+            color: white;
+            padding: 15px;
+            cursor: pointer;
+            margin-top: 10px;
+            display: flex;
+            justify-content: space-between;
+            border-radius: 5px;
+        }
+
+        .categoria-content {
+            display: none; /* Por defecto oculto */
+        }
+
+        .categoria-content.show {
+            display: block; /* Se muestra al hacer clic */
+        }
+
+        /* Para marcar canales que fallan */
+        .canal-card.fallido {
+            opacity: 0.5;
+            filter: grayscale(1);
+            border: 1px solid red !important;
+        }
+
+        .canal-card.fallido::after {
+            content: " (Caído)";
+            color: red;
+            font-size: 10px;
+        }
+
+        .canal-card {
+            width: 100%;
+            background: transparent;
+            border: none;
+            color: white;
+            display: flex;
+            align-items: center;
+            padding: 8px 15px;
+            cursor: pointer;
+            text-align: left;
+            border-bottom: 1px solid #222;
+            font-size: 13px;
+        }
+
+        .canal-card:hover {
+            background: #2a2a2a;
+        }
+
+        /* Tamaño controlado para los iconos */
+        .canal-card img {
+            width: 30px;
+            height: 30px;
+            margin-right: 12px;
+            object-fit: contain;
+            background: #000;
+            border-radius: 4px;
+        }
+
+        .canal-card:focus {
+            outline: 3px solid var(--primary);
+            background: #333;
+            transform: scale(1.02); /* Un pequeño zoom para que se note en la tele */
+            transition: 0.1s;
+        }
+
+    </style>
+</head>
+<body>
+
+<div id="nav">
+    <div class="nav-btn active" id="btn-tv" onclick="setTab('tv')">📺</div>
+    <div class="nav-btn" id="btn-vod" onclick="setTab('series')">🎬</div>
+</div>
+
+<div id="sidebar">
+    <div id="search-box">
+        <input type="text" id="search-input" placeholder="Buscar canal...">
+        <select id="country-filter" style="width: 100%; margin-top: 10px; padding: 8px; background: #333; color: white; border: none; border-radius: 5px;">
+            <option value="all">Todos los países</option>
+        </select>
+    </div>
+    <div id="list"></div>
+</div>
+
+<div id="main">
+    <div id="loading-info">Listo</div>
+    <div id="video-container">
+        <video id="video" controls autoplay></video>
+    </div>
+    <div id="ep-list"></div>
+</div>
+
+<script>
+    let player, video, tvData = [], seriesData = [], currentTab = 'tv';
+
+    async function initApp() {
+    video = document.getElementById('video');
+    shaka.polyfill.installAll();
+    player = new shaka.Player(video);
+
+    try {
+        // Cargamos la lista de Paraguay
+        const resPy = await fetch('comunJakare.json');
+        const dataPy = await resPy.json();
+
+        // Cargamos la nueva lista de Argentina
+        const resArg = await fetch('argentina.json');
+        const dataArg = await resArg.json();
+
+        // Cargamos la nueva lista
+        const resMun = await fetch('CanalesMundiales_organizado.json');
+        const dataMun = await resMun.json();
+
+        // Unimos las dos listas en una sola
+        tvData = [...dataPy, ...dataArg, ...dataMun]; 
+        
+        const selector = document.getElementById('country-filter');
+tvData.forEach((categoria, index) => {
+    const opt = document.createElement('option');
+    opt.value = index; // Guardamos el índice de la categoría
+    opt.innerText = `${categoria.title} (${categoria.items.length})`;
+    selector.appendChild(opt);
+});
+
+// Evento para que cuando cambies el país, se actualice la lista
+selector.onchange = render;
+
+        render(); // Esta función dibujará todos los canales en pantalla
+    } catch (e) {
+        console.error("Error cargando las listas:", e);
+    }
+}
+
+    function setTab(tab) {
+        currentTab = tab;
+        document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+        const btnId = tab === 'tv' ? 'btn-tv' : 'btn-vod';
+        document.getElementById(btnId).classList.add('active');
+        document.getElementById('ep-list').style.display = 'none';
+        render();
+    }
+
+    function render() {
+    const container = document.getElementById('list'); 
+    const searchTerm = document.getElementById('search-input').value.toLowerCase();
+    const btn = document.createElement('button');
+            btn.className = 'canal-card';
+            btn.tabIndex = 0; // Esto permite que las flechas lo encuentren
+    // 1. Obtenemos qué país/categoría está seleccionada
+    const countryFilter = document.getElementById('country-filter');
+    const selectedIndex = countryFilter ? countryFilter.value : 'all';
+
+    container.innerHTML = '';
+
+    tvData.forEach((categoria, index) => {
+        // 2. Lógica de Filtro por País:
+        // Si no es "all" y el índice actual no es el seleccionado, lo ignoramos
+        if (selectedIndex !== 'all' && selectedIndex != index) return;
+
+        // 3. Lógica de Filtro por Buscador:
+        const itemsFiltrados = categoria.items.filter(canal => 
+            canal.name.toLowerCase().includes(searchTerm)
+        );
+
+        // Si no hay canales en esta categoría (después de buscar), no dibujamos nada
+        if (itemsFiltrados.length === 0) return;
+
+        // Crear el encabezado de la categoría
+        const header = document.createElement('div');
+        header.className = 'categoria-header';
+        header.innerHTML = `
+            <span>${categoria.title}</span>
+            <span style="font-size: 0.8em; opacity: 0.7;">${itemsFiltrados.length}</span>
+        `;
+
+        const content = document.createElement('div');
+        content.className = 'categoria-content';
+        
+        // 4. Comportamiento inteligente:
+        // Si el usuario busca algo O si seleccionó un país específico, mostramos los canales abiertos
+        if (searchTerm.length > 0 || selectedIndex !== 'all') {
+            content.classList.add('show');
+        }
+
+        itemsFiltrados.forEach(canal => {
+            const btn = document.createElement('button');
+            btn.className = 'canal-card';
+            // Agregamos loading="lazy" para optimizar los 12.000 iconos
+            btn.innerHTML = `
+                <img src="${canal.icono || 'https://via.placeholder.com/30'}" 
+                     loading="lazy"
+                     onerror="this.src='https://via.placeholder.com/30'">
+                <span>${canal.name}</span>
+            `;
+            
+            btn.onclick = () => {
+                window.lastClickedBtn = btn; 
+                loadStream(canal.url, canal.drm_license_uri);
+            };
+            
+            content.appendChild(btn);
+        });
+
+        header.onclick = () => content.classList.toggle('show');
+
+        container.appendChild(header);
+        container.appendChild(content);
+    });
+}
+
+    function showEps(s) {
+        const panel = document.getElementById('ep-list');
+        panel.style.display = 'block';
+        panel.innerHTML = `<strong>${s.nombre}</strong><br>`;
+        s.temporadas.forEach(t => {
+            t.capitulos.forEach(c => {
+                const b = document.createElement('div');
+                b.className = 'ep-item';
+                b.innerText = `T${t.numero_temporada} E${c.numero}`;
+                b.onclick = () => loadStream(c.url);
+                panel.appendChild(b);
+            });
+        });
+    }
+
+    async function loadStream(url, drm) {
+    if (!url) return;
+    const workerBase = "https://my-iptv-proxy.leanrey.workers.dev/?url=";
+    const urlObj = new URL(url.trim());
+    const currentBase = urlObj.href.substring(0, urlObj.href.lastIndexOf('/') + 1);
+    
+    document.getElementById('loading-info').innerText = 'Cargando...';
+    
+    try {
+        if (player) await player.unload();
+        player.getNetworkingEngine().clearAllRequestFilters(); 
+        player.configure({ drm: { clearKeys: {} } });
+
+        player.getNetworkingEngine().registerRequestFilter(function(type, request) {
+            let uri = request.uris[0];
+            if (uri.includes("leanrey.workers.dev/?url=")) return;
+
+            // --- PROTECCIÓN PARAGUAY ---
+            if (url.includes("desdeparaguay.net")) {
+                if (uri.includes("leanrey.workers.dev") && !uri.includes("?url=")) {
+                    const fileName = uri.split('leanrey.workers.dev/')[1];
+                    const originalHost = "https://rds3gen.desdeparaguay.net/e40tv/e40tv_py_alta/";
+                    request.uris[0] = workerBase + encodeURIComponent(originalHost + fileName);
+                    return;
+                }
+            } 
+            // --- LÓGICA ARGENTINA / GENERAL ---
+            else {
+                if (uri.includes("leanrey.workers.dev") && !uri.includes("?url=")) {
+                    const part = uri.split('/').pop(); 
+                    uri = currentBase + part;
+                }
+                if (!uri.startsWith('http')) uri = currentBase + uri;
+            }
+
+            if (uri.startsWith('http') && !uri.includes("leanrey.workers.dev")) {
+                request.uris[0] = workerBase + encodeURIComponent(uri);
+            }
+        });
+
+        // --- SOLUCIÓN AL ERROR 4000 ---
+        if (url.includes("desdeparaguay.net")) {
+            await player.load(workerBase + encodeURIComponent(url.trim()));
+        } else {
+            await player.load(workerBase + encodeURIComponent(url.trim()), null, 'application/x-mpegurl');
+        }
+        
+        // Si carga exitosamente, nos aseguramos de quitar la marca de "fallido" si la tenía
+        if(window.lastClickedBtn) window.lastClickedBtn.classList.remove('fallido');
+        
+        video.play();
+        document.getElementById('loading-info').innerText = 'Reproduciendo';
+
+    } catch (e) {
+        console.error("Fallo con Worker, intentando carga directa...", e);
+        
+        try {
+            document.getElementById('loading-info').innerText = 'Reintentando directo...';
+            await player.unload();
+            player.getNetworkingEngine().clearAllRequestFilters(); 
+            
+            await player.load(url.trim()); 
+            
+            // Si funciona directo, también quitamos la marca de fallido
+            if(window.lastClickedBtn) window.lastClickedBtn.classList.remove('fallido');
+            
+            video.play();
+            document.getElementById('loading-info').innerText = 'Reproduciendo (Directo)';
+        } catch (e2) {
+            console.error("Fallo total:", e2);
+            document.getElementById('loading-info').innerText = 'Canal Caído';
+            
+            // MARCAR COMO FALLIDO: Si falló tanto con Worker como Directo
+            if(window.lastClickedBtn) {
+                window.lastClickedBtn.classList.add('fallido');
+            }
+        }
+    }
+}
+    document.addEventListener('keydown', (e) => {
+    // Si el usuario está escribiendo en el buscador, no movemos los canales
+    if (document.activeElement.id === 'search-input') {
+        if (e.key === 'Enter') document.getElementById('country-filter').focus();
+        return;
+    }
+
+    const cards = Array.from(document.querySelectorAll('.canal-card'));
+    const currentIndex = cards.indexOf(document.activeElement);
+
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = cards[currentIndex + 1] || cards[0];
+        next?.focus();
+    } 
+    else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prev = cards[currentIndex - 1] || cards[cards.length - 1];
+        prev?.focus();
+    } 
+    else if (e.key === 'Enter' && document.activeElement.classList.contains('canal-card')) {
+        // En la tele, el botón central es el Enter
+        document.activeElement.click();
+    }
+});
+    document.getElementById('search-input').addEventListener('input', render);
+    initApp();
+</script>
+</body>
+</html>
