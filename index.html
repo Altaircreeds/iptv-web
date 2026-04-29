@@ -333,7 +333,19 @@
     try {
         if (player) await player.unload();
         player.getNetworkingEngine().clearAllRequestFilters(); 
-        player.configure({ drm: { clearKeys: {} } });
+        player.configure({
+            drm: {
+                clearKeys: {}, // Mantiene compatibilidad con llaves manuales
+                retryParameters: { timeout: 30000 }, // Da más tiempo de espera
+                advanced: {
+                    'com.widevine.alpha': {
+                        // Estas dos líneas evitan el error 6012 en la mayoría de los casos
+                        'videoRobustness': 'SW_SECURE_DECODE',
+                        'audioRobustness': 'SW_SECURE_DECODE'
+                    }
+                }
+            }
+        });
 
         player.getNetworkingEngine().registerRequestFilter(function(type, request) {
             let uri = request.uris[0];
