@@ -103,6 +103,34 @@
             transform: scale(1.02); /* Un pequeño zoom para que se note en la tele */
             transition: 0.1s;
         }
+        /* Si la imagen no carga, que no ocupe espacio o se vea el icono roto */
+        .canal-card img[src=""], 
+        .canal-card img:not([src]) {
+            display: none;
+        }
+
+        /* Un estilo para cuando la imagen falla y usamos el onerror */
+        .img-error {
+            opacity: 0.3;
+            filter: grayscale(1);
+        }
+
+        .fav-btn {
+            margin-left: auto;
+            font-size: 18px;
+            cursor: pointer;
+            opacity: 0.3;
+            transition: 0.2s;
+            padding: 5px;
+        }
+        .fav-btn.active {
+            opacity: 1;
+            color: #ffc107; /* Color dorado */
+            text-shadow: 0 0 5px rgba(255, 193, 7, 0.5);
+        }
+        .canal-card:focus .fav-btn {
+            opacity: 0.8;
+        }
 
     </style>
 </head>
@@ -134,39 +162,57 @@
 <script>
     let player, video, tvData = [], seriesData = [], currentTab = 'tv';
 
+    let favoritos = JSON.parse(localStorage.getItem('tv_favs')) || [];
+
+    function toggleFavorito(canalName) {
+        if (favoritos.includes(canalName)) {
+            favoritos = favoritos.filter(f => f !== canalName);
+        } else {
+            favoritos.push(canalName);
+        }
+        localStorage.setItem('tv_favs', JSON.stringify(favoritos));
+        render(); // Refrescamos la lista para que se vea el cambio
+}
+
     async function initApp() {
     video = document.getElementById('video');
     shaka.polyfill.installAll();
     player = new shaka.Player(video);
-
+    
     try {
-        // Cargamos la lista de Paraguay
+        // Cargamos las listas
         const resPy = await fetch('comunJakare.json');
         const dataPy = await resPy.json();
 
-        // Cargamos la nueva lista de Argentina
         const resArg = await fetch('argentina.json');
         const dataArg = await resArg.json();
 
-        // Cargamos la nueva lista
         const resMun = await fetch('CanalesMundiales_organizado.json');
         const dataMun = await resMun.json();
 
-        // Unimos las dos listas en una sola
+        // Unimos todas las listas
         tvData = [...dataPy, ...dataArg, ...dataMun]; 
         
         const selector = document.getElementById('country-filter');
-tvData.forEach((categoria, index) => {
-    const opt = document.createElement('option');
-    opt.value = index; // Guardamos el índice de la categoría
-    opt.innerText = `${categoria.title} (${categoria.items.length})`;
-    selector.appendChild(opt);
-});
+        
+        // 1. Limpiamos y ponemos las opciones fijas
+        selector.innerHTML = `
+            <option value="all">Todos los países</option>
+            <option value="favs">⭐ Mis Favoritos</option>
+        `;
 
-// Evento para que cuando cambies el país, se actualice la lista
-selector.onchange = render;
+        // 2. Agregamos dinámicamente cada categoría de tus JSON
+        tvData.forEach((categoria, index) => {
+            const opt = document.createElement('option');
+            opt.value = index; 
+            opt.innerText = `${categoria.title} (${categoria.items.length})`;
+            selector.appendChild(opt);
+        });
 
-        render(); // Esta función dibujará todos los canales en pantalla
+        // Evento para actualizar la lista al cambiar el filtro
+        selector.onchange = render;
+
+        render(); 
     } catch (e) {
         console.error("Error cargando las listas:", e);
     }
@@ -184,69 +230,81 @@ selector.onchange = render;
     function render() {
     const container = document.getElementById('list'); 
     const searchTerm = document.getElementById('search-input').value.toLowerCase();
-    const btn = document.createElement('button');
-            btn.className = 'canal-card';
-            btn.tabIndex = 0; // Esto permite que las flechas lo encuentren
-    // 1. Obtenemos qué país/categoría está seleccionada
     const countryFilter = document.getElementById('country-filter');
     const selectedIndex = countryFilter ? countryFilter.value : 'all';
 
     container.innerHTML = '';
 
-    tvData.forEach((categoria, index) => {
-        // 2. Lógica de Filtro por País:
-        // Si no es "all" y el índice actual no es el seleccionado, lo ignoramos
-        if (selectedIndex !== 'all' && selectedIndex != index) return;
+    // --- SECCIÓN DE FAVORITOS ---
+    if (favoritos.length > 0 && (selectedIndex === 'all' || selectedIndex === 'favs')) {
+        const favItems = [];
+        tvData.forEach(cat => {
+            cat.items.forEach(canal => {
+                if (favoritos.includes(canal.name)) favItems.push(canal);
+            });
+        });
 
-        // 3. Lógica de Filtro por Buscador:
+        // Eliminar duplicados si el mismo canal está en varias listas
+        const uniqueFavs = Array.from(new Set(favItems.map(a => a.name)))
+            .map(name => favItems.find(a => a.name === name));
+
+        if (uniqueFavs.length > 0) {
+            renderCategoria(container, { title: "⭐ Mis Favoritos", items: uniqueFavs }, searchTerm, true);
+        }
+    }
+
+    // --- SECCIONES NORMALES ---
+    tvData.forEach((categoria, index) => {
+        if (selectedIndex !== 'all' && selectedIndex != index) return;
+        renderCategoria(container, categoria, searchTerm);
+    });
+}
+
+// Función auxiliar para no repetir código de dibujado
+    function renderCategoria(container, categoria, searchTerm, isFavSection = false) {
         const itemsFiltrados = categoria.items.filter(canal => 
             canal.name.toLowerCase().includes(searchTerm)
         );
 
-        // Si no hay canales en esta categoría (después de buscar), no dibujamos nada
         if (itemsFiltrados.length === 0) return;
 
-        // Crear el encabezado de la categoría
         const header = document.createElement('div');
         header.className = 'categoria-header';
-        header.innerHTML = `
-            <span>${categoria.title}</span>
-            <span style="font-size: 0.8em; opacity: 0.7;">${itemsFiltrados.length}</span>
-        `;
+        if(isFavSection) header.style.background = '#3e2b00'; // Color distinto para favoritos
+        header.innerHTML = `<span>${categoria.title}</span><span style="font-size: 0.8em; opacity: 0.7;">${itemsFiltrados.length}</span>`;
 
         const content = document.createElement('div');
-        content.className = 'categoria-content';
-        
-        // 4. Comportamiento inteligente:
-        // Si el usuario busca algo O si seleccionó un país específico, mostramos los canales abiertos
-        if (searchTerm.length > 0 || selectedIndex !== 'all') {
-            content.classList.add('show');
-        }
+        content.className = 'categoria-content ' + (searchTerm.length > 0 || isFavSection ? 'show' : '');
 
         itemsFiltrados.forEach(canal => {
+            const isFav = favoritos.includes(canal.name);
             const btn = document.createElement('button');
             btn.className = 'canal-card';
-            // Agregamos loading="lazy" para optimizar los 12.000 iconos
+            btn.tabIndex = 0;
+            btn.dataset.name = canal.name; // Guardamos el nombre para el control remoto
+
+            const dominiosProhibidos = ['telewebion.com', 'paste.pics', 'twimg.com', 'googleusercontent.com', 'fmcosmos.com', 'i.ibb.co', 'go2travel.tv', 'iqra.tv'];
+            const urlIcono = canal.icono || "";
+            const esSeguro = urlIcono.startsWith('http') && !dominiosProhibidos.some(dom => urlIcono.includes(dom));
+
             btn.innerHTML = `
-                <img src="${canal.icono || 'https://via.placeholder.com/30'}" 
-                     loading="lazy"
-                     onerror="this.src='https://via.placeholder.com/30'">
+                ${esSeguro ? `<img src="${urlIcono}" loading="lazy" onerror="this.remove()">` : ''}
                 <span>${canal.name}</span>
+                <span class="fav-btn ${isFav ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorito('${canal.name}')">★</span>
             `;
             
             btn.onclick = () => {
                 window.lastClickedBtn = btn; 
-                loadStream(canal.url, canal.drm_license_uri);
+                loadStream(canal.url, canal.drm_license_uri, canal.name);
             };
             
             content.appendChild(btn);
         });
 
         header.onclick = () => content.classList.toggle('show');
-
         container.appendChild(header);
         container.appendChild(content);
-    });
+
 }
 
     function showEps(s) {
@@ -343,30 +401,31 @@ selector.onchange = render;
         }
     }
 }
-    document.addEventListener('keydown', (e) => {
-    // Si el usuario está escribiendo en el buscador, no movemos los canales
-    if (document.activeElement.id === 'search-input') {
-        if (e.key === 'Enter') document.getElementById('country-filter').focus();
-        return;
-    }
+        document.addEventListener('keydown', (e) => {
+        if (document.activeElement.id === 'search-input') {
+            if (e.key === 'Enter') document.getElementById('country-filter').focus();
+            return;
+        }
 
-    const cards = Array.from(document.querySelectorAll('.canal-card'));
-    const currentIndex = cards.indexOf(document.activeElement);
+        const cards = Array.from(document.querySelectorAll('.canal-card'));
+        const currentIndex = cards.indexOf(document.activeElement);
 
-    if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        const next = cards[currentIndex + 1] || cards[0];
-        next?.focus();
-    } 
-    else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        const prev = cards[currentIndex - 1] || cards[cards.length - 1];
-        prev?.focus();
-    } 
-    else if (e.key === 'Enter' && document.activeElement.classList.contains('canal-card')) {
-        // En la tele, el botón central es el Enter
-        document.activeElement.click();
-    }
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            (cards[currentIndex + 1] || cards[0])?.focus();
+        } 
+        else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            (cards[currentIndex - 1] || cards[cards.length - 1])?.focus();
+        } 
+        else if (e.key === 'Enter' && document.activeElement.classList.contains('canal-card')) {
+            document.activeElement.click();
+        }
+        // NUEVO: Marcar favorito con flecha derecha
+        else if (e.key === 'ArrowRight' && document.activeElement.classList.contains('canal-card')) {
+            const name = document.activeElement.dataset.name;
+            if(name) toggleFavorito(name);
+        }
 });
     document.getElementById('search-input').addEventListener('input', render);
     initApp();
